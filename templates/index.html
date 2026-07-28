@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevOps Daily</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <h1>DevOps&nbsp;Daily</h1>
+      <p class="tagline">One question a day to keep your skills sharp.</p>
+    </header>
+
+    <main id="app" class="app">
+      <div class="loading">Loading…</div>
+    </main>
+  </div>
+
+  <script id="topics-data" type="application/json">{{ topics | tojson }}</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
