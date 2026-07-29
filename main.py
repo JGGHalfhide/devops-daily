@@ -18,7 +18,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 EST = timezone(timedelta(hours=-5))
-TOPICS = ["Python", "Bash", "AWS", "Ansible", "Kubernetes", "Linux", "Networking"]
+TOPICS = ["Python", "Bash", "AWS", "Ansible", "Kubernetes", "Linux", "Networking", "Terraform"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 WEAKEST_MIN_ATTEMPTS = 10
 

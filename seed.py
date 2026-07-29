@@ -3,8 +3,14 @@ from db import get_conn, init_db
 from content.python_easy import PYTHON_EASY_QUESTIONS
 from content.python_medium import PYTHON_MEDIUM_QUESTIONS
 from content.python_hard import PYTHON_HARD_QUESTIONS
+from content.terraform_easy import TERRAFORM_EASY_QUESTIONS
+from content.terraform_medium import TERRAFORM_MEDIUM_QUESTIONS
+from content.terraform_hard import TERRAFORM_HARD_QUESTIONS
 
-QUESTIONS = PYTHON_EASY_QUESTIONS + PYTHON_MEDIUM_QUESTIONS + PYTHON_HARD_QUESTIONS
+QUESTIONS = (
+    PYTHON_EASY_QUESTIONS + PYTHON_MEDIUM_QUESTIONS + PYTHON_HARD_QUESTIONS
+    + TERRAFORM_EASY_QUESTIONS + TERRAFORM_MEDIUM_QUESTIONS + TERRAFORM_HARD_QUESTIONS
+)
 
 
 def seed():
