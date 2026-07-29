@@ -52,13 +52,7 @@ function renderLocked(stateData, stats) {
   const panel = el('div', { class: 'panel' });
   panel.appendChild(el('h2', {}, "Today's question is done — come back tomorrow"));
 
-  const countdown = el('div', { class: 'countdown' }, formatCountdown(stateData.seconds_until_reset));
-  panel.appendChild(countdown);
-  let remaining = stateData.seconds_until_reset;
-  setInterval(() => {
-    remaining = Math.max(0, remaining - 1);
-    countdown.textContent = formatCountdown(remaining);
-  }, 1000);
+  panel.appendChild(makeCountdownEl(stateData.seconds_until_reset));
 
   const today = stateData.today;
   panel.appendChild(el('div', { class: 'question-meta' }, [
@@ -87,7 +81,7 @@ function resultDetail(label, value) {
 
 function formatAnswer(answer, type) {
   if (Array.isArray(answer)) return answer.join(' → ');
-  if (typeof answer === 'string' && type === 'drag-and-drop') {
+  if (typeof answer === 'string' && (type === 'drag-and-drop' || type === 'dropdown-order')) {
     try {
       const parsed = JSON.parse(answer);
       if (Array.isArray(parsed)) return parsed.join(' → ');
@@ -101,6 +95,17 @@ function formatCountdown(totalSeconds) {
   const m = Math.floor((totalSeconds % 3600) / 60);
   const s = totalSeconds % 60;
   return [h, m, s].map(n => String(n).padStart(2, '0')).join(':');
+}
+
+function makeCountdownEl(seconds) {
+  const countdown = el('div', { class: 'countdown' }, formatCountdown(seconds));
+  let remaining = seconds;
+  const interval = setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    countdown.textContent = formatCountdown(remaining);
+    if (remaining <= 0) clearInterval(interval);
+  }, 1000);
+  return countdown;
 }
 
 // ── stats panel ──────────────────────────────────────────────────────────────
@@ -175,6 +180,7 @@ function renderSelector(stats) {
   panel.appendChild(step2);
 
   app.appendChild(panel);
+  app.appendChild(renderStatsPanel(stats));
 }
 
 function renderTopicStep(step2, stats) {
@@ -276,6 +282,27 @@ function renderQuestion(q) {
     panel.appendChild(el('p', { class: 'spinner-text' }, 'Drag items to reorder them, top to bottom.'));
     getAnswer = () => JSON.stringify(order);
 
+  } else if (q.type === 'dropdown-order') {
+    const selects = q.options.map((_, i) => {
+      const select = el('select', { class: 'dropdown-order-select' });
+      select.appendChild(el('option', { value: '' }, `— position ${i + 1} —`));
+      q.options.forEach(opt => select.appendChild(el('option', { value: opt }, opt)));
+      return select;
+    });
+    const list = el('div', { class: 'dropdown-order-list' },
+      selects.map((select, i) => el('div', { class: 'dropdown-order-row' }, [
+        el('span', { class: 'dropdown-order-index' }, String(i + 1)),
+        select,
+      ]))
+    );
+    panel.appendChild(list);
+    panel.appendChild(el('p', { class: 'spinner-text' }, 'Pick which item belongs at each position.'));
+    getAnswer = () => {
+      const values = selects.map(s => s.value);
+      if (values.some(v => !v)) return null;
+      return JSON.stringify(values);
+    };
+
   } else if (q.type === 'coding') {
     const textarea = el('textarea', { class: 'code-input', placeholder: 'Write your solution here…' });
     panel.appendChild(textarea);
@@ -325,7 +352,15 @@ function renderResult(q, userAnswer, result) {
   if (result.explanation) panel.appendChild(resultDetail('Explanation', result.explanation));
   if (result.llm_feedback) panel.appendChild(resultDetail('Feedback', result.llm_feedback));
   panel.appendChild(el('p', { class: 'spinner-text' }, "That's your one question for today — see you tomorrow."));
+
+  const countdownSlot = el('div', {});
+  panel.appendChild(countdownSlot);
+
   app.appendChild(panel);
+
+  api('/api/state').then(stateData => {
+    if (stateData.locked) countdownSlot.appendChild(makeCountdownEl(stateData.seconds_until_reset));
+  }).catch(() => {});
 
   api('/api/stats').then(stats => app.appendChild(renderStatsPanel(stats))).catch(() => {});
 }

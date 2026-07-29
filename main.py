@@ -3,12 +3,15 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import anthropic
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from db import get_conn, init_db
+
+load_dotenv()
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -144,7 +147,7 @@ def _explanation_for(q: dict, correct: bool, user_answer: str) -> Optional[str]:
 
 
 def _display_correct_answer(q: dict):
-    if q["type"] == "drag-and-drop":
+    if q["type"] in ("drag-and-drop", "dropdown-order"):
         return json.loads(q["correct_answer"])
     return q["correct_answer"]
 
@@ -179,7 +182,7 @@ Student's answer:
 Respond with whether the student's answer is correct, and 2-3 sentences of specific feedback."""
 
     response = client.messages.create(
-        model="claude-opus-5",
+        model="claude-haiku-4-5",
         max_tokens=1024,
         output_config={"format": {"type": "json_schema", "schema": schema}},
         messages=[{"role": "user", "content": grading_prompt}],
@@ -329,7 +332,7 @@ def post_answer(payload: AnswerPayload):
                 raise HTTPException(status_code=502, detail=f"LLM grading failed: {e}")
             explanation = _explanation_for(q, correct, payload.user_answer)
 
-        elif q["type"] == "drag-and-drop":
+        elif q["type"] in ("drag-and-drop", "dropdown-order"):
             try:
                 user_order = json.loads(payload.user_answer)
             except json.JSONDecodeError:
