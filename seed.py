@@ -6,10 +6,14 @@ from content.python_hard import PYTHON_HARD_QUESTIONS
 from content.terraform_easy import TERRAFORM_EASY_QUESTIONS
 from content.terraform_medium import TERRAFORM_MEDIUM_QUESTIONS
 from content.terraform_hard import TERRAFORM_HARD_QUESTIONS
+from content.bash_easy import BASH_EASY_QUESTIONS
+from content.bash_medium import BASH_MEDIUM_QUESTIONS
+from content.bash_hard import BASH_HARD_QUESTIONS
 
 QUESTIONS = (
     PYTHON_EASY_QUESTIONS + PYTHON_MEDIUM_QUESTIONS + PYTHON_HARD_QUESTIONS
     + TERRAFORM_EASY_QUESTIONS + TERRAFORM_MEDIUM_QUESTIONS + TERRAFORM_HARD_QUESTIONS
+    + BASH_EASY_QUESTIONS + BASH_MEDIUM_QUESTIONS + BASH_HARD_QUESTIONS
 )
 
 
