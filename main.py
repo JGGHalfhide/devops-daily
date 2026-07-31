@@ -368,3 +368,18 @@ def post_answer(payload: AnswerPayload):
             "correct_answer": correct_answer_out,
             "llm_feedback": llm_feedback,
         }
+
+
+# ── POST /api/reset ──────────────────────────────────────────────────────────
+
+class ResetPayload(BaseModel):
+    confirm: bool = False
+
+
+@app.post("/api/reset")
+def reset_progress(payload: ResetPayload):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    with get_conn() as conn:
+        conn.execute("DELETE FROM attempts")
+    return {"reset": True}

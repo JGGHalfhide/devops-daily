@@ -156,7 +156,61 @@ function renderStatsPanel(stats) {
   panel.appendChild(topicLabel);
   panel.appendChild(breakdownList(stats.by_topic));
 
+  panel.appendChild(renderResetControl());
+
   return panel;
+}
+
+function renderResetControl() {
+  const wrap = el('div', { class: 'reset-control' });
+
+  const resetBtn = el('button', { class: 'btn-danger' }, 'Reset progress…');
+  const confirmRow = el('div', { class: 'reset-confirm', style: 'display:none' });
+  const errBox = el('div', { class: 'error-text' });
+
+  const cancelBtn = el('button', { class: 'btn-secondary' }, 'Cancel');
+  const confirmBtn = el('button', { class: 'btn-danger' }, 'Yes, wipe everything');
+
+  resetBtn.addEventListener('click', () => {
+    resetBtn.style.display = 'none';
+    confirmRow.style.display = '';
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    confirmRow.style.display = 'none';
+    resetBtn.style.display = '';
+  });
+
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    confirmBtn.textContent = 'Wiping…';
+    errBox.textContent = '';
+    try {
+      await api('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+      boot();
+    } catch (e) {
+      errBox.textContent = e.message;
+      confirmBtn.disabled = false;
+      cancelBtn.disabled = false;
+      confirmBtn.textContent = 'Yes, wipe everything';
+    }
+  });
+
+  confirmRow.appendChild(
+    el('p', { class: 'reset-warning' },
+      'This permanently deletes every attempt, stat, and streak. Questions are unaffected. This cannot be undone.')
+  );
+  confirmRow.appendChild(el('div', { class: 'reset-confirm-actions' }, [cancelBtn, confirmBtn]));
+  confirmRow.appendChild(errBox);
+
+  wrap.appendChild(resetBtn);
+  wrap.appendChild(confirmRow);
+  return wrap;
 }
 
 function statTile(value, label) {

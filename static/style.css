@@ -114,6 +114,37 @@ button {
 
 .btn-secondary:hover { border-color: var(--accent); }
 
+.btn-danger {
+  display: inline-block;
+  background: transparent;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  border-radius: 8px;
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.btn-danger:hover { background: rgba(224, 98, 92, 0.12); }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.reset-control {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--panel-border);
+}
+
+.reset-warning {
+  color: var(--text-dim);
+  font-size: 0.88rem;
+  margin: 0 0 0.75rem;
+}
+
+.reset-confirm-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
 /* choice grid (difficulty / topic buttons) */
 
 .choice-grid {
