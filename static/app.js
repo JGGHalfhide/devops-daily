@@ -4,8 +4,17 @@ const TOPICS = JSON.parse(document.getElementById('topics-data').textContent);
 const state = {
   difficulty: null,
   topic: null,
+  qtype: null,
   practice: localStorage.getItem('practiceMode') === '1',
 };
+
+const QUESTION_TYPES = [
+  { value: 'mcq', label: 'Multiple choice' },
+  { value: 'fill-in-blank', label: 'Fill in the blank' },
+  { value: 'drag-and-drop', label: 'Drag and drop' },
+  { value: 'dropdown-order', label: 'Dropdown order' },
+  { value: 'coding', label: 'Coding' },
+];
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -245,6 +254,9 @@ function renderSelector(stats) {
   panel.appendChild(el('h2', {}, "Today's question"));
   panel.appendChild(el('div', { class: 'step-label' }, 'Step 1 — Difficulty'));
 
+  const step2 = el('div', { id: 'step2' });
+  const step3 = el('div', { id: 'step3' });
+
   const diffGrid = el('div', { class: 'choice-grid' });
   ['Easy', 'Medium', 'Hard', 'Random'].forEach(label => {
     const value = label.toLowerCase();
@@ -253,20 +265,19 @@ function renderSelector(stats) {
       [...diffGrid.children].forEach(c => c.classList.remove('selected'));
       btn.classList.add('selected');
       state.difficulty = value;
-      renderTopicStep(step2, stats);
+      renderTopicStep(step2, step3, stats);
     });
     diffGrid.appendChild(btn);
   });
   panel.appendChild(diffGrid);
-
-  const step2 = el('div', { id: 'step2' });
   panel.appendChild(step2);
+  panel.appendChild(step3);
 
   app.appendChild(panel);
   app.appendChild(renderStatsPanel(stats));
 }
 
-function renderTopicStep(step2, stats) {
+function renderTopicStep(step2, step3, stats) {
   step2.innerHTML = '';
   const label = el('div', { class: 'step-label' }, 'Step 2 — Topic');
   label.style.marginTop = '1.25rem';
@@ -278,21 +289,41 @@ function renderTopicStep(step2, stats) {
   if (stats && stats.weakest_eligible) {
     select.appendChild(el('option', { value: 'Weakest' }, 'Weakest topic'));
   }
+  select.addEventListener('change', () => {
+    state.topic = select.value;
+    renderTypeStep(step3);
+  });
   step2.appendChild(select);
+
+  state.topic = select.value;
+  renderTypeStep(step3);
+}
+
+function renderTypeStep(step3) {
+  step3.innerHTML = '';
+  const label = el('div', { class: 'step-label' }, 'Step 3 — Question type');
+  label.style.marginTop = '1.25rem';
+  step3.appendChild(label);
+
+  const select = el('select', { class: 'topic-select' });
+  select.appendChild(el('option', { value: 'Random' }, 'Random (any type)'));
+  QUESTION_TYPES.forEach(t => select.appendChild(el('option', { value: t.value }, t.label)));
+  step3.appendChild(select);
 
   const errBox = el('div', { class: 'error-text' });
   const startBtn = el('button', { class: 'btn' }, 'Start');
   startBtn.style.marginTop = '1rem';
   startBtn.addEventListener('click', () => startQuestion(select.value, errBox));
-  step2.appendChild(startBtn);
-  step2.appendChild(errBox);
+  step3.appendChild(startBtn);
+  step3.appendChild(errBox);
 }
 
-async function startQuestion(topic, errBox) {
-  state.topic = topic;
+async function startQuestion(qtype, errBox) {
+  state.qtype = qtype;
   try {
     const question = await api(
-      `/api/question?difficulty=${encodeURIComponent(state.difficulty)}&topic=${encodeURIComponent(topic)}` +
+      `/api/question?difficulty=${encodeURIComponent(state.difficulty)}` +
+      `&topic=${encodeURIComponent(state.topic)}&qtype=${encodeURIComponent(qtype)}` +
       (state.practice ? '&practice=1' : '')
     );
     renderQuestion(question);

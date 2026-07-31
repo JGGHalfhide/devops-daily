@@ -20,6 +20,7 @@ templates = Jinja2Templates(directory="templates")
 EST = timezone(timedelta(hours=-5))
 TOPICS = ["Python", "Bash", "AWS", "Ansible", "Kubernetes", "Linux", "Networking", "Terraform"]
 DIFFICULTIES = ["easy", "medium", "hard"]
+QUESTION_TYPES = ["mcq", "fill-in-blank", "drag-and-drop", "dropdown-order", "coding"]
 WEAKEST_MIN_ATTEMPTS = 10
 
 
@@ -247,10 +248,14 @@ def get_stats():
 # ── GET /api/question ────────────────────────────────────────────────────────
 
 @app.get("/api/question")
-def get_question(difficulty: str = "random", topic: str = "Random", practice: bool = False):
+def get_question(
+    difficulty: str = "random", topic: str = "Random", qtype: str = "Random", practice: bool = False
+):
     difficulty = difficulty.lower()
     if difficulty not in DIFFICULTIES + ["random"]:
         raise HTTPException(status_code=400, detail="Invalid difficulty")
+    if qtype != "Random" and qtype not in QUESTION_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid question type")
 
     with get_conn() as conn:
         attempts = _all_attempts(conn)
@@ -287,6 +292,9 @@ def get_question(difficulty: str = "random", topic: str = "Random", practice: bo
         if resolved_topic:
             query += " AND topic = ?"
             params.append(resolved_topic)
+        if qtype != "Random":
+            query += " AND type = ?"
+            params.append(qtype)
         query += " ORDER BY RANDOM() LIMIT 1"
 
         row = conn.execute(query, params).fetchone()
