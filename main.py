@@ -126,6 +126,7 @@ def _serialize_question(row: dict) -> dict:
     q.pop("correct_answer", None)
     q.pop("explanation_correct", None)
     q.pop("explanation_incorrect", None)
+    q.pop("last_seen_at", None)
     return q
 
 
@@ -278,30 +279,36 @@ def get_question(
         else:
             raise HTTPException(status_code=400, detail="Invalid topic")
 
-        answered_ids = [a["question_id"] for a in attempts]
-
-        query = "SELECT * FROM questions WHERE 1=1"
-        params: list = []
-        if answered_ids:
-            placeholders = ",".join("?" * len(answered_ids))
-            query += f" AND id NOT IN ({placeholders})"
-            params += answered_ids
+        pool_query = "SELECT id FROM questions WHERE 1=1"
+        pool_params: list = []
         if difficulty != "random":
-            query += " AND difficulty = ?"
-            params.append(difficulty)
+            pool_query += " AND difficulty = ?"
+            pool_params.append(difficulty)
         if resolved_topic:
-            query += " AND topic = ?"
-            params.append(resolved_topic)
+            pool_query += " AND topic = ?"
+            pool_params.append(resolved_topic)
         if qtype != "Random":
-            query += " AND type = ?"
-            params.append(qtype)
-        query += " ORDER BY RANDOM() LIMIT 1"
+            pool_query += " AND type = ?"
+            pool_params.append(qtype)
 
-        row = conn.execute(query, params).fetchone()
+        def pick_unseen():
+            return conn.execute(
+                f"SELECT * FROM questions WHERE id IN ({pool_query}) "
+                "AND last_seen_at IS NULL ORDER BY RANDOM() LIMIT 1",
+                pool_params,
+            ).fetchone()
+
+        row = pick_unseen()
+        if not row:
+            # Every question matching this combination has already been seen (or
+            # there are none at all) — recycle the whole matching pool and retry.
+            conn.execute(f"UPDATE questions SET last_seen_at = NULL WHERE id IN ({pool_query})", pool_params)
+            row = pick_unseen()
+
         if not row:
             raise HTTPException(
                 status_code=404,
-                detail="No unanswered questions available for that combination — try different filters",
+                detail="No questions available for that combination — try different filters",
             )
 
         return _serialize_question(dict(row))
@@ -369,6 +376,9 @@ def post_answer(payload: AnswerPayload):
                 llm_feedback,
             ),
         )
+        conn.execute(
+            "UPDATE questions SET last_seen_at = ? WHERE id = ?", (now, payload.question_id)
+        )
 
         return {
             "correct": correct,
@@ -390,4 +400,5 @@ def reset_progress(payload: ResetPayload):
         raise HTTPException(status_code=400, detail="Confirmation required")
     with get_conn() as conn:
         conn.execute("DELETE FROM attempts")
+        conn.execute("UPDATE questions SET last_seen_at = NULL")
     return {"reset": True}

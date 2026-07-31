@@ -38,3 +38,7 @@ def init_db():
                 llm_feedback TEXT
             );
         """)
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(questions)").fetchall()}
+        if "last_seen_at" not in columns:
+            conn.execute("ALTER TABLE questions ADD COLUMN last_seen_at TEXT")
