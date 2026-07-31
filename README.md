@@ -28,10 +28,13 @@ pip install -r requirements.txt
 ANTHROPIC_API_KEY=sk-...
 ```
 
-This is required for grading `coding`-type questions (`main.py` calls
-the Anthropic API via `anthropic.Anthropic()` with model
-`claude-haiku-4-5` to judge free-form bash/Python answers). All other
-question types are graded locally without an API call.
+This is required for grading `coding`-type questions — free-form
+answers that exist across most topics (Bash, Python, Terraform, AWS,
+Ansible, Linux, Kubernetes, Networking), not just Bash/Python.
+`main.py` calls the Anthropic API via `anthropic.Anthropic()` with
+model `claude-haiku-4-5` to judge these. All other question types
+(mcq, fill-in-blank, drag-and-drop, dropdown-order) are graded locally
+without an API call.
 
 **Database**: SQLite, path controlled by the `DB_PATH` env var
 (defaults to `devops_daily.db` in the repo root — see `db.py`). The
