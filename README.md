@@ -90,11 +90,23 @@ can answer back-to-back without waiting — each answer still gets
 recorded normally in `attempts`, so stats and streak logic reflect
 practice attempts too.
 
+### Question recycling
+
+Within a given difficulty/topic/type combination, questions are drawn
+without repeats — each one is marked seen when you answer it and
+excluded from that combination's pool going forward. Once every
+question matching the combination you're currently using has been
+seen, that specific pool is automatically reset (marked unseen again)
+so it keeps cycling instead of running out. Recycling is tracked
+per-question via `questions.last_seen_at`, separately from `attempts`,
+so it doesn't affect stats or streak history.
+
 ### Reset progress
 
 The stats panel has a "Reset progress…" control (two-step confirm)
-that wipes all rows from `attempts`, returning the app to a first-run
-state. It never touches the `questions` table.
+that wipes all rows from `attempts` and clears every question's seen
+state, returning the app to a first-run state. It never touches
+question content (prompts, answers, explanations).
 
 ## Question bank
 
@@ -110,7 +122,9 @@ content files.
 
 **`questions`** — the content bank: `topic`, `difficulty`, `type`,
 `prompt`, `options` (JSON, for mcq/drag-and-drop/dropdown-order),
-`correct_answer`, `explanation_correct`, `explanation_incorrect`.
+`correct_answer`, `explanation_correct`, `explanation_incorrect`, plus
+`last_seen_at` (nullable timestamp used only for the recycling queue —
+see [Question recycling](#question-recycling)).
 
 **`attempts`** — one row per answered question: `question_id` (FK →
 `questions`), `timestamp`, `topic`, `difficulty`, `type`,
