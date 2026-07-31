@@ -45,6 +45,25 @@ body {
   font-size: 0.95rem;
 }
 
+.practice-toggle {
+  margin-top: 0.9rem;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.practice-toggle:hover { border-color: var(--accent); }
+
+.practice-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--panel-border);

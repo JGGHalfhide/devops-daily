@@ -202,11 +202,11 @@ def index(request: Request):
 # ── GET /api/state ───────────────────────────────────────────────────────────
 
 @app.get("/api/state")
-def get_state():
+def get_state(practice: bool = False):
     with get_conn() as conn:
         attempts = _all_attempts(conn)
         today_attempt = _todays_attempt(attempts)
-        if not today_attempt:
+        if not today_attempt or practice:
             return {"locked": False}
 
         row = conn.execute(
@@ -247,14 +247,14 @@ def get_stats():
 # ── GET /api/question ────────────────────────────────────────────────────────
 
 @app.get("/api/question")
-def get_question(difficulty: str = "random", topic: str = "Random"):
+def get_question(difficulty: str = "random", topic: str = "Random", practice: bool = False):
     difficulty = difficulty.lower()
     if difficulty not in DIFFICULTIES + ["random"]:
         raise HTTPException(status_code=400, detail="Invalid difficulty")
 
     with get_conn() as conn:
         attempts = _all_attempts(conn)
-        if _todays_attempt(attempts):
+        if _todays_attempt(attempts) and not practice:
             raise HTTPException(status_code=409, detail="Already answered today")
 
         resolved_topic = None
@@ -304,13 +304,14 @@ def get_question(difficulty: str = "random", topic: str = "Random"):
 class AnswerPayload(BaseModel):
     question_id: int
     user_answer: str
+    practice: bool = False
 
 
 @app.post("/api/answer")
 def post_answer(payload: AnswerPayload):
     with get_conn() as conn:
         attempts = _all_attempts(conn)
-        if _todays_attempt(attempts):
+        if _todays_attempt(attempts) and not payload.practice:
             raise HTTPException(status_code=409, detail="Already answered today")
 
         row = conn.execute(

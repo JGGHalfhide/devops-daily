@@ -4,6 +4,7 @@ const TOPICS = JSON.parse(document.getElementById('topics-data').textContent);
 const state = {
   difficulty: null,
   topic: null,
+  practice: localStorage.getItem('practiceMode') === '1',
 };
 
 async function api(path, opts) {
@@ -37,13 +38,41 @@ function clear() { app.innerHTML = ''; }
 // ── init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
-  const [stateData, stats] = await Promise.all([api('/api/state'), api('/api/stats')]);
+  const [stateData, stats] = await Promise.all([
+    api('/api/state' + (state.practice ? '?practice=1' : '')),
+    api('/api/stats'),
+  ]);
   if (stateData.locked) {
     renderLocked(stateData, stats);
   } else {
     renderSelector(stats);
   }
 }
+
+function boot() {
+  init().catch(err => {
+    clear();
+    app.appendChild(el('div', { class: 'panel error-text' }, 'Failed to load: ' + err.message));
+  });
+}
+
+// ── practice mode toggle ─────────────────────────────────────────────────────
+
+const practiceToggle = document.getElementById('practice-toggle');
+
+function updatePracticeToggleUI() {
+  practiceToggle.textContent = `Practice Mode: ${state.practice ? 'On' : 'Off'}`;
+  practiceToggle.classList.toggle('active', state.practice);
+}
+
+practiceToggle.addEventListener('click', () => {
+  state.practice = !state.practice;
+  localStorage.setItem('practiceMode', state.practice ? '1' : '0');
+  updatePracticeToggleUI();
+  boot();
+});
+
+updatePracticeToggleUI();
 
 // ── locked view ──────────────────────────────────────────────────────────────
 
@@ -209,7 +238,8 @@ async function startQuestion(topic, errBox) {
   state.topic = topic;
   try {
     const question = await api(
-      `/api/question?difficulty=${encodeURIComponent(state.difficulty)}&topic=${encodeURIComponent(topic)}`
+      `/api/question?difficulty=${encodeURIComponent(state.difficulty)}&topic=${encodeURIComponent(topic)}` +
+      (state.practice ? '&practice=1' : '')
     );
     renderQuestion(question);
   } catch (e) {
@@ -325,7 +355,7 @@ function renderQuestion(q) {
       const result = await api('/api/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question_id: q.id, user_answer: answer }),
+        body: JSON.stringify({ question_id: q.id, user_answer: answer, practice: state.practice }),
       });
       renderResult(q, answer, result);
     } catch (e) {
@@ -351,21 +381,27 @@ function renderResult(q, userAnswer, result) {
   panel.appendChild(resultDetail('Correct answer', formatAnswer(result.correct_answer, q.type)));
   if (result.explanation) panel.appendChild(resultDetail('Explanation', result.explanation));
   if (result.llm_feedback) panel.appendChild(resultDetail('Feedback', result.llm_feedback));
-  panel.appendChild(el('p', { class: 'spinner-text' }, "That's your one question for today — see you tomorrow."));
 
-  const countdownSlot = el('div', {});
-  panel.appendChild(countdownSlot);
+  if (state.practice) {
+    panel.appendChild(el('p', { class: 'spinner-text' }, 'Practice mode is on — answer another whenever you like.'));
+    const nextBtn = el('button', { class: 'btn' }, 'Next question');
+    nextBtn.style.marginTop = '0.5rem';
+    nextBtn.addEventListener('click', () => {
+      api('/api/stats').then(renderSelector).catch(() => renderSelector({ by_difficulty: {}, by_topic: {} }));
+    });
+    panel.appendChild(nextBtn);
+  } else {
+    panel.appendChild(el('p', { class: 'spinner-text' }, "That's your one question for today — see you tomorrow."));
+    const countdownSlot = el('div', {});
+    panel.appendChild(countdownSlot);
+    api('/api/state').then(stateData => {
+      if (stateData.locked) countdownSlot.appendChild(makeCountdownEl(stateData.seconds_until_reset));
+    }).catch(() => {});
+  }
 
   app.appendChild(panel);
-
-  api('/api/state').then(stateData => {
-    if (stateData.locked) countdownSlot.appendChild(makeCountdownEl(stateData.seconds_until_reset));
-  }).catch(() => {});
 
   api('/api/stats').then(stats => app.appendChild(renderStatsPanel(stats))).catch(() => {});
 }
 
-init().catch(err => {
-  clear();
-  app.appendChild(el('div', { class: 'panel error-text' }, 'Failed to load: ' + err.message));
-});
+boot();
