@@ -6,6 +6,7 @@ const state = {
   topic: null,
   qtype: null,
   practice: localStorage.getItem('practiceMode') === '1',
+  mode: localStorage.getItem('mode') === 'blitz' ? 'blitz' : 'qotd',
 };
 
 const QUESTION_TYPES = [
@@ -15,6 +16,9 @@ const QUESTION_TYPES = [
   { value: 'dropdown-order', label: 'Dropdown order' },
   { value: 'coding', label: 'Coding' },
 ];
+
+const BLITZ_QUESTION_TYPES = QUESTION_TYPES.filter(t => t.value !== 'coding');
+const BLITZ_DURATION_SECONDS = 60;
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -47,6 +51,11 @@ function clear() { app.innerHTML = ''; }
 // ── init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
+  if (state.mode === 'blitz') {
+    const stats = await api('/api/stats');
+    renderBlitzSelector(stats);
+    return;
+  }
   const [stateData, stats] = await Promise.all([
     api('/api/state' + (state.practice ? '?practice=1' : '')),
     api('/api/stats'),
@@ -82,6 +91,26 @@ practiceToggle.addEventListener('click', () => {
 });
 
 updatePracticeToggleUI();
+
+// ── mode tabs ────────────────────────────────────────────────────────────────
+
+const modeTabs = document.getElementById('mode-tabs');
+
+function updateModeTabsUI() {
+  [...modeTabs.children].forEach(btn => btn.classList.toggle('active', btn.dataset.mode === state.mode));
+  practiceToggle.style.display = state.mode === 'blitz' ? 'none' : '';
+}
+
+modeTabs.addEventListener('click', (e) => {
+  const btn = e.target.closest('.mode-tab');
+  if (!btn || btn.dataset.mode === state.mode) return;
+  state.mode = btn.dataset.mode;
+  localStorage.setItem('mode', state.mode);
+  updateModeTabsUI();
+  boot();
+});
+
+updateModeTabsUI();
 
 // ── locked view ──────────────────────────────────────────────────────────────
 
@@ -155,6 +184,7 @@ function renderStatsPanel(stats) {
     statTile(stats.streak, 'Day streak'),
     statTile(stats.overall_pct != null ? stats.overall_pct + '%' : '—', 'Overall correct'),
     statTile(stats.total_attempts, 'Total answered'),
+    statTile(stats.best_blitz_score != null ? stats.best_blitz_score : '—', 'Best blitz score'),
   ]));
 
   panel.appendChild(el('div', { class: 'step-label' }, 'By difficulty'));
@@ -334,16 +364,7 @@ async function startQuestion(qtype, errBox) {
 
 // ── question view ────────────────────────────────────────────────────────────
 
-function renderQuestion(q) {
-  clear();
-  const panel = el('div', { class: 'panel' });
-  panel.appendChild(el('div', { class: 'question-meta' }, [
-    el('span', { class: 'badge' }, q.topic),
-    el('span', { class: 'badge' }, q.difficulty),
-    el('span', { class: 'badge' }, q.type),
-  ]));
-  panel.appendChild(el('div', { class: 'prompt-text' }, q.prompt));
-
+function buildAnswerInput(q, panel) {
   let getAnswer = () => null;
 
   if (q.type === 'mcq') {
@@ -424,6 +445,21 @@ function renderQuestion(q) {
     getAnswer = () => textarea.value.trim();
   }
 
+  return getAnswer;
+}
+
+function renderQuestion(q) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'question-meta' }, [
+    el('span', { class: 'badge' }, q.topic),
+    el('span', { class: 'badge' }, q.difficulty),
+    el('span', { class: 'badge' }, q.type),
+  ]));
+  panel.appendChild(el('div', { class: 'prompt-text' }, q.prompt));
+
+  const getAnswer = buildAnswerInput(q, panel);
+
   const submitBtn = el('button', { class: 'btn' }, 'Submit');
   const errBox = el('div', { class: 'error-text' });
 
@@ -486,6 +522,255 @@ function renderResult(q, userAnswer, result) {
 
   app.appendChild(panel);
 
+  api('/api/stats').then(stats => app.appendChild(renderStatsPanel(stats))).catch(() => {});
+}
+
+// ── blitz mode ───────────────────────────────────────────────────────────────
+
+function formatBlitzTime(seconds) {
+  return `0:${String(seconds).padStart(2, '0')}`;
+}
+
+function renderBlitzSelector(stats) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', {}, 'Blitz — 60 seconds, answer as many as you can'));
+  panel.appendChild(el('div', { class: 'step-label' }, 'Step 1 — Difficulty'));
+
+  const step2 = el('div', { id: 'blitz-step2' });
+  const step3 = el('div', { id: 'blitz-step3' });
+  const selection = { difficulty: null, topic: null };
+
+  const diffGrid = el('div', { class: 'choice-grid' });
+  ['Easy', 'Medium', 'Hard', 'Random'].forEach(label => {
+    const value = label.toLowerCase();
+    const btn = el('button', { class: 'choice-btn' }, label);
+    btn.addEventListener('click', () => {
+      [...diffGrid.children].forEach(c => c.classList.remove('selected'));
+      btn.classList.add('selected');
+      selection.difficulty = value;
+      renderBlitzTopicStep(step2, step3, stats, selection);
+    });
+    diffGrid.appendChild(btn);
+  });
+  panel.appendChild(diffGrid);
+  panel.appendChild(step2);
+  panel.appendChild(step3);
+
+  app.appendChild(panel);
+  app.appendChild(renderStatsPanel(stats));
+}
+
+function renderBlitzTopicStep(step2, step3, stats, selection) {
+  step2.innerHTML = '';
+  const label = el('div', { class: 'step-label' }, 'Step 2 — Topic');
+  label.style.marginTop = '1.25rem';
+  step2.appendChild(label);
+
+  const select = el('select', { class: 'topic-select' });
+  select.appendChild(el('option', { value: 'Random' }, 'Random (any topic)'));
+  TOPICS.forEach(t => select.appendChild(el('option', { value: t }, t)));
+  if (stats && stats.weakest_eligible) {
+    select.appendChild(el('option', { value: 'Weakest' }, 'Weakest topic'));
+  }
+  select.addEventListener('change', () => {
+    selection.topic = select.value;
+    renderBlitzTypeStep(step3, selection);
+  });
+  step2.appendChild(select);
+
+  selection.topic = select.value;
+  renderBlitzTypeStep(step3, selection);
+}
+
+function renderBlitzTypeStep(step3, selection) {
+  step3.innerHTML = '';
+  const label = el('div', { class: 'step-label' }, 'Step 3 — Question type');
+  label.style.marginTop = '1.25rem';
+  step3.appendChild(label);
+
+  const select = el('select', { class: 'topic-select' });
+  select.appendChild(el('option', { value: 'Random' }, 'Random (any type)'));
+  BLITZ_QUESTION_TYPES.forEach(t => select.appendChild(el('option', { value: t.value }, t.label)));
+  step3.appendChild(select);
+
+  const errBox = el('div', { class: 'error-text' });
+  const startBtn = el('button', { class: 'btn' }, 'Start Blitz');
+  startBtn.style.marginTop = '1rem';
+  startBtn.addEventListener('click', () => startBlitzRun(selection.difficulty, selection.topic, select.value));
+  step3.appendChild(startBtn);
+  step3.appendChild(errBox);
+}
+
+function startBlitzRun(difficulty, topic, qtype) {
+  const run = {
+    difficulty, topic, qtype,
+    secondsLeft: BLITZ_DURATION_SECONDS,
+    score: 0,
+    total: 0,
+    seenIds: [],
+    active: true,
+    pending: false,
+    timeUp: false,
+    finished: false,
+  };
+  renderBlitzShell(run);
+}
+
+function renderBlitzShell(run) {
+  clear();
+  const panel = el('div', { class: 'panel blitz-panel' });
+
+  const header = el('div', { class: 'blitz-header' });
+  const timerEl = el('div', { class: 'blitz-timer' }, formatBlitzTime(run.secondsLeft));
+  const scoreEl = el('div', { class: 'blitz-score' }, `Score: ${run.score}`);
+  header.appendChild(timerEl);
+  header.appendChild(scoreEl);
+  panel.appendChild(header);
+
+  const slot = el('div', { id: 'blitz-question-slot' }, [el('div', { class: 'loading' }, 'Loading…')]);
+  panel.appendChild(slot);
+
+  app.appendChild(panel);
+
+  run.timerEl = timerEl;
+  run.scoreEl = scoreEl;
+  run.timerHandle = setInterval(() => {
+    run.secondsLeft = Math.max(0, run.secondsLeft - 1);
+    timerEl.textContent = formatBlitzTime(run.secondsLeft);
+    if (run.secondsLeft <= 0) {
+      clearInterval(run.timerHandle);
+      run.active = false;
+      run.timeUp = true;
+      if (!run.pending) finalizeBlitz(run);
+    }
+  }, 1000);
+
+  loadNextBlitzQuestion(run);
+}
+
+async function loadNextBlitzQuestion(run) {
+  const slot = document.getElementById('blitz-question-slot');
+  if (!slot) return;
+  slot.innerHTML = '';
+  slot.appendChild(el('div', { class: 'loading' }, 'Loading…'));
+  try {
+    const q = await api(
+      `/api/blitz/question?difficulty=${encodeURIComponent(run.difficulty)}` +
+      `&topic=${encodeURIComponent(run.topic)}&qtype=${encodeURIComponent(run.qtype)}` +
+      `&exclude=${run.seenIds.slice(-30).join(',')}`
+    );
+    if (!run.active || run.finished) return;
+    renderBlitzQuestionInto(slot, run, q);
+  } catch (e) {
+    if (!run.active || run.finished) return;
+    slot.innerHTML = '';
+    slot.appendChild(el('div', { class: 'error-text' }, 'Failed to load question: ' + e.message));
+  }
+}
+
+function renderBlitzQuestionInto(slot, run, q) {
+  slot.innerHTML = '';
+  slot.appendChild(el('div', { class: 'question-meta' }, [
+    el('span', { class: 'badge' }, q.topic),
+    el('span', { class: 'badge' }, q.difficulty),
+    el('span', { class: 'badge' }, q.type),
+  ]));
+  slot.appendChild(el('div', { class: 'prompt-text' }, q.prompt));
+
+  const getAnswer = buildAnswerInput(q, slot);
+
+  const submitBtn = el('button', { class: 'btn' }, 'Submit');
+  const errBox = el('div', { class: 'error-text' });
+
+  submitBtn.addEventListener('click', async () => {
+    const answer = getAnswer();
+    if (!answer) {
+      errBox.textContent = 'Please provide an answer.';
+      return;
+    }
+    if (run.pending || run.finished) return;
+    errBox.textContent = '';
+    submitBtn.disabled = true;
+    run.pending = true;
+    run.seenIds.push(q.id);
+
+    try {
+      const result = await api('/api/blitz/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question_id: q.id, user_answer: answer }),
+      });
+      run.total += 1;
+      if (result.correct) run.score += 1;
+      run.pending = false;
+      run.scoreEl.textContent = `Score: ${run.score}`;
+
+      if (run.timeUp || !run.active) {
+        finalizeBlitz(run);
+        return;
+      }
+      loadNextBlitzQuestion(run);
+    } catch (e) {
+      run.pending = false;
+      errBox.textContent = e.message;
+      submitBtn.disabled = false;
+      if (run.timeUp) finalizeBlitz(run);
+    }
+  });
+
+  slot.appendChild(submitBtn);
+  slot.appendChild(errBox);
+}
+
+async function finalizeBlitz(run) {
+  if (run.finished) return;
+  run.finished = true;
+
+  let bestInfo = { best_score: null, is_new_best: false };
+  try {
+    bestInfo = await api('/api/blitz/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        difficulty: run.difficulty, topic: run.topic, qtype: run.qtype,
+        score: run.score, total: run.total,
+      }),
+    });
+  } catch (e) { /* still show local result even if persisting the run failed */ }
+
+  renderBlitzResult(run, bestInfo);
+}
+
+function renderBlitzResult(run, bestInfo) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', {}, "Time's up!"));
+
+  if (bestInfo.is_new_best && run.score > 0) {
+    panel.appendChild(el('div', { class: 'result-banner correct' }, 'New best blitz score!'));
+  }
+
+  panel.appendChild(el('div', { class: 'question-meta' }, [
+    el('span', { class: 'badge' }, run.difficulty),
+    el('span', { class: 'badge' }, run.topic),
+    el('span', { class: 'badge' }, run.qtype),
+  ]));
+
+  panel.appendChild(el('div', { class: 'stats-grid' }, [
+    statTile(run.score, 'Correct'),
+    statTile(run.total, 'Answered'),
+    statTile(bestInfo.best_score != null ? bestInfo.best_score : run.score, 'Best blitz score'),
+  ]));
+
+  const againBtn = el('button', { class: 'btn' }, 'Play again');
+  againBtn.style.marginTop = '1.25rem';
+  againBtn.addEventListener('click', () => {
+    api('/api/stats').then(renderBlitzSelector).catch(() => renderBlitzSelector({ by_difficulty: {}, by_topic: {} }));
+  });
+  panel.appendChild(againBtn);
+
+  app.appendChild(panel);
   api('/api/stats').then(stats => app.appendChild(renderStatsPanel(stats))).catch(() => {});
 }
 

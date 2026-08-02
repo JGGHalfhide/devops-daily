@@ -21,6 +21,7 @@ EST = timezone(timedelta(hours=-5))
 TOPICS = ["Python", "Bash", "AWS", "Ansible", "Kubernetes", "Linux", "Networking", "Terraform"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 QUESTION_TYPES = ["mcq", "fill-in-blank", "drag-and-drop", "dropdown-order", "coding"]
+QUESTION_TYPES_BLITZ = [t for t in QUESTION_TYPES if t != "coding"]
 WEAKEST_MIN_ATTEMPTS = 10
 
 
@@ -154,6 +155,32 @@ def _display_correct_answer(q: dict):
     return q["correct_answer"]
 
 
+def _resolve_topic(topic: str, attempts: list) -> Optional[str]:
+    if topic == "Random":
+        return None
+    if topic == "Weakest":
+        stats = _compute_stats(attempts)
+        if not stats["weakest_eligible"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Weakest topic isn't available yet (need 10+ total attempts)",
+            )
+        return stats["weakest_topic"]
+    if topic in TOPICS:
+        return topic
+    raise HTTPException(status_code=400, detail="Invalid topic")
+
+
+def _grade_non_coding(q: dict, user_answer: str) -> bool:
+    if q["type"] in ("drag-and-drop", "dropdown-order"):
+        try:
+            user_order = json.loads(user_answer)
+        except json.JSONDecodeError:
+            user_order = None
+        return user_order == json.loads(q["correct_answer"])
+    return user_answer.strip().lower() == q["correct_answer"].strip().lower()
+
+
 # ── LLM grading (coding questions) ───────────────────────────────────────────
 
 def _grade_coding(prompt: str, reference_solution: str, user_answer: str):
@@ -243,7 +270,11 @@ def get_state(practice: bool = False):
 @app.get("/api/stats")
 def get_stats():
     with get_conn() as conn:
-        return _compute_stats(_all_attempts(conn))
+        stats = _compute_stats(_all_attempts(conn))
+        stats["best_blitz_score"] = conn.execute(
+            "SELECT MAX(score) AS best FROM blitz_runs"
+        ).fetchone()["best"]
+        return stats
 
 
 # ── GET /api/question ────────────────────────────────────────────────────────
@@ -263,21 +294,7 @@ def get_question(
         if _todays_attempt(attempts) and not practice:
             raise HTTPException(status_code=409, detail="Already answered today")
 
-        resolved_topic = None
-        if topic == "Random":
-            resolved_topic = None
-        elif topic == "Weakest":
-            stats = _compute_stats(attempts)
-            if not stats["weakest_eligible"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Weakest topic isn't available yet (need 10+ total attempts)",
-                )
-            resolved_topic = stats["weakest_topic"]
-        elif topic in TOPICS:
-            resolved_topic = topic
-        else:
-            raise HTTPException(status_code=400, detail="Invalid topic")
+        resolved_topic = _resolve_topic(topic, attempts)
 
         pool_query = "SELECT id FROM questions WHERE 1=1"
         pool_params: list = []
@@ -348,16 +365,8 @@ def post_answer(payload: AnswerPayload):
                 raise HTTPException(status_code=502, detail=f"LLM grading failed: {e}")
             explanation = _explanation_for(q, correct, payload.user_answer)
 
-        elif q["type"] in ("drag-and-drop", "dropdown-order"):
-            try:
-                user_order = json.loads(payload.user_answer)
-            except json.JSONDecodeError:
-                user_order = None
-            correct = user_order == json.loads(q["correct_answer"])
-            explanation = _explanation_for(q, correct, payload.user_answer)
-
-        else:  # mcq / fill-in-blank
-            correct = payload.user_answer.strip().lower() == q["correct_answer"].strip().lower()
+        else:  # mcq / fill-in-blank / drag-and-drop / dropdown-order
+            correct = _grade_non_coding(q, payload.user_answer)
             explanation = _explanation_for(q, correct, payload.user_answer)
 
         now = datetime.now(timezone.utc).isoformat()
@@ -402,3 +411,107 @@ def reset_progress(payload: ResetPayload):
         conn.execute("DELETE FROM attempts")
         conn.execute("UPDATE questions SET last_seen_at = NULL")
     return {"reset": True}
+
+
+# ── Blitz mode ───────────────────────────────────────────────────────────────
+#
+# Blitz is a 60-second timed run through as many questions as you can answer.
+# It's intentionally isolated from QOTD: it never touches `attempts` (so it
+# can't affect the daily lock, streak, or topic/difficulty stats) and never
+# marks `questions.last_seen_at` (so it can't disturb the QOTD recycling
+# queue). Instead, the client tracks which question ids it has already seen
+# during the current run and passes them as `exclude` so a fast player
+# doesn't immediately get repeats; once a small pool is exhausted mid-run,
+# repeats are allowed rather than erroring out. Coding questions are excluded
+# since LLM grading latency would eat into the timer.
+
+@app.get("/api/blitz/question")
+def get_blitz_question(
+    difficulty: str = "random", topic: str = "Random", qtype: str = "Random", exclude: str = ""
+):
+    difficulty = difficulty.lower()
+    if difficulty not in DIFFICULTIES + ["random"]:
+        raise HTTPException(status_code=400, detail="Invalid difficulty")
+    if qtype != "Random" and qtype not in QUESTION_TYPES_BLITZ:
+        raise HTTPException(status_code=400, detail="Invalid question type")
+
+    exclude_ids = [int(x) for x in exclude.split(",") if x.strip().isdigit()]
+
+    with get_conn() as conn:
+        resolved_topic = _resolve_topic(topic, _all_attempts(conn))
+
+        pool_query = "SELECT id FROM questions WHERE type != 'coding'"
+        pool_params: list = []
+        if difficulty != "random":
+            pool_query += " AND difficulty = ?"
+            pool_params.append(difficulty)
+        if resolved_topic:
+            pool_query += " AND topic = ?"
+            pool_params.append(resolved_topic)
+        if qtype != "Random":
+            pool_query += " AND type = ?"
+            pool_params.append(qtype)
+
+        def pick(ids_to_exclude):
+            query = f"SELECT * FROM questions WHERE id IN ({pool_query})"
+            params = list(pool_params)
+            if ids_to_exclude:
+                query += f" AND id NOT IN ({','.join('?' * len(ids_to_exclude))})"
+                params += ids_to_exclude
+            query += " ORDER BY RANDOM() LIMIT 1"
+            return conn.execute(query, params).fetchone()
+
+        row = pick(exclude_ids) or pick([])
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail="No questions available for that combination — try different filters",
+            )
+
+        return _serialize_question(dict(row))
+
+
+class BlitzCheckPayload(BaseModel):
+    question_id: int
+    user_answer: str
+
+
+@app.post("/api/blitz/check")
+def post_blitz_check(payload: BlitzCheckPayload):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM questions WHERE id = ?", (payload.question_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Question not found")
+        q = dict(row)
+        if q["type"] == "coding":
+            raise HTTPException(status_code=400, detail="Coding questions aren't available in Blitz mode")
+
+        correct = _grade_non_coding(q, payload.user_answer)
+        return {
+            "correct": correct,
+            "correct_answer": _display_correct_answer(q),
+            "explanation": _explanation_for(q, correct, payload.user_answer),
+        }
+
+
+class BlitzFinishPayload(BaseModel):
+    difficulty: str
+    topic: str
+    qtype: str
+    score: int
+    total: int
+
+
+@app.post("/api/blitz/finish")
+def post_blitz_finish(payload: BlitzFinishPayload):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO blitz_runs (timestamp, difficulty, topic, type, score, total)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (now, payload.difficulty, payload.topic, payload.qtype, payload.score, payload.total),
+        )
+        best = conn.execute("SELECT MAX(score) AS best FROM blitz_runs").fetchone()["best"]
+    return {"best_score": best, "is_new_best": payload.score == best}

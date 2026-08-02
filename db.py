@@ -37,6 +37,16 @@ def init_db():
                 correct      INTEGER NOT NULL,
                 llm_feedback TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS blitz_runs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp  TEXT    NOT NULL,
+                difficulty TEXT    NOT NULL,
+                topic      TEXT    NOT NULL,
+                type       TEXT    NOT NULL,
+                score      INTEGER NOT NULL,
+                total      INTEGER NOT NULL
+            );
         """)
 
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(questions)").fetchall()}
