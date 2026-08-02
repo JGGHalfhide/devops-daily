@@ -36,8 +36,7 @@ ANTHROPIC_API_KEY=sk-...
 
 This is required for grading `coding`-type questions — free-form
 answers that exist across most topics (Bash, Python, Terraform, AWS,
-Ansible, Linux, Kubernetes, Networking), not just Bash/Python.
-`main.py` calls the Anthropic API via `anthropic.Anthropic()` with
+Ansible, Linux, Kubernetes, Networking). `main.py` calls the Anthropic API via `anthropic.Anthropic()` with
 model `claude-haiku-4-5` to judge these. All other question types
 (mcq, fill-in-blank, drag-and-drop, dropdown-order) are graded locally
 without an API call.
