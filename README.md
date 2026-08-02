@@ -87,6 +87,9 @@ If not, you're taken through a three-step selection screen:
    dropdown-order, coding, or Random (any type available for the
    difficulty/topic already chosen)
 
+![DevOps Daily Home](images/select1.jpg)
+![DevOps Daily Home](images/select2.jpg)
+
 Answering submits to `/api/answer`, records the attempt, and shows the
 correct answer plus an explanation (or LLM feedback, for coding
 questions).
