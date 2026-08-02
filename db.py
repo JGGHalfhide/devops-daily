@@ -47,6 +47,16 @@ def init_db():
                 score      INTEGER NOT NULL,
                 total      INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS take5_runs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp  TEXT    NOT NULL,
+                difficulty TEXT    NOT NULL,
+                topic      TEXT    NOT NULL,
+                type       TEXT    NOT NULL,
+                score      INTEGER NOT NULL,
+                total      INTEGER NOT NULL
+            );
         """)
 
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(questions)").fetchall()}

@@ -6,7 +6,7 @@ const state = {
   topic: null,
   qtype: null,
   practice: localStorage.getItem('practiceMode') === '1',
-  mode: localStorage.getItem('mode') === 'blitz' ? 'blitz' : 'qotd',
+  mode: ['blitz', 'take5'].includes(localStorage.getItem('mode')) ? localStorage.getItem('mode') : 'qotd',
 };
 
 const QUESTION_TYPES = [
@@ -19,6 +19,7 @@ const QUESTION_TYPES = [
 
 const BLITZ_QUESTION_TYPES = QUESTION_TYPES.filter(t => t.value !== 'coding');
 const BLITZ_DURATION_SECONDS = 60;
+const TAKE5_LENGTH = 5;
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -54,6 +55,11 @@ async function init() {
   if (state.mode === 'blitz') {
     const stats = await api('/api/stats');
     renderBlitzSelector(stats);
+    return;
+  }
+  if (state.mode === 'take5') {
+    const stats = await api('/api/stats');
+    renderTake5Selector(stats);
     return;
   }
   const [stateData, stats] = await Promise.all([
@@ -98,7 +104,7 @@ const modeTabs = document.getElementById('mode-tabs');
 
 function updateModeTabsUI() {
   [...modeTabs.children].forEach(btn => btn.classList.toggle('active', btn.dataset.mode === state.mode));
-  practiceToggle.style.display = state.mode === 'blitz' ? 'none' : '';
+  practiceToggle.style.display = state.mode === 'qotd' ? '' : 'none';
 }
 
 modeTabs.addEventListener('click', (e) => {
@@ -185,6 +191,7 @@ function renderStatsPanel(stats) {
     statTile(stats.overall_pct != null ? stats.overall_pct + '%' : '—', 'Overall correct'),
     statTile(stats.total_attempts, 'Total answered'),
     statTile(stats.best_blitz_score != null ? stats.best_blitz_score : '—', 'Best blitz score'),
+    statTile(stats.best_take5_score != null ? stats.best_take5_score + '/5' : '—', 'Best Take 5 score'),
   ]));
 
   panel.appendChild(el('div', { class: 'step-label' }, 'By difficulty'));
@@ -767,6 +774,228 @@ function renderBlitzResult(run, bestInfo) {
   againBtn.style.marginTop = '1.25rem';
   againBtn.addEventListener('click', () => {
     api('/api/stats').then(renderBlitzSelector).catch(() => renderBlitzSelector({ by_difficulty: {}, by_topic: {} }));
+  });
+  panel.appendChild(againBtn);
+
+  app.appendChild(panel);
+  api('/api/stats').then(stats => app.appendChild(renderStatsPanel(stats))).catch(() => {});
+}
+
+// ── take 5 mode ──────────────────────────────────────────────────────────────
+
+function renderTake5Selector(stats) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', {}, 'Take 5 — five questions, no clock'));
+  panel.appendChild(el('div', { class: 'step-label' }, 'Step 1 — Difficulty'));
+
+  const step2 = el('div', { id: 'take5-step2' });
+  const step3 = el('div', { id: 'take5-step3' });
+  const selection = { difficulty: null, topic: null };
+
+  const diffGrid = el('div', { class: 'choice-grid' });
+  ['Easy', 'Medium', 'Hard', 'Random'].forEach(label => {
+    const value = label.toLowerCase();
+    const btn = el('button', { class: 'choice-btn' }, label);
+    btn.addEventListener('click', () => {
+      [...diffGrid.children].forEach(c => c.classList.remove('selected'));
+      btn.classList.add('selected');
+      selection.difficulty = value;
+      renderTake5TopicStep(step2, step3, stats, selection);
+    });
+    diffGrid.appendChild(btn);
+  });
+  panel.appendChild(diffGrid);
+  panel.appendChild(step2);
+  panel.appendChild(step3);
+
+  app.appendChild(panel);
+  app.appendChild(renderStatsPanel(stats));
+}
+
+function renderTake5TopicStep(step2, step3, stats, selection) {
+  step2.innerHTML = '';
+  const label = el('div', { class: 'step-label' }, 'Step 2 — Topic');
+  label.style.marginTop = '1.25rem';
+  step2.appendChild(label);
+
+  const select = el('select', { class: 'topic-select' });
+  select.appendChild(el('option', { value: 'Random' }, 'Random (any topic)'));
+  TOPICS.forEach(t => select.appendChild(el('option', { value: t }, t)));
+  if (stats && stats.weakest_eligible) {
+    select.appendChild(el('option', { value: 'Weakest' }, 'Weakest topic'));
+  }
+  select.addEventListener('change', () => {
+    selection.topic = select.value;
+    renderTake5TypeStep(step3, selection);
+  });
+  step2.appendChild(select);
+
+  selection.topic = select.value;
+  renderTake5TypeStep(step3, selection);
+}
+
+function renderTake5TypeStep(step3, selection) {
+  step3.innerHTML = '';
+  const label = el('div', { class: 'step-label' }, 'Step 3 — Question type');
+  label.style.marginTop = '1.25rem';
+  step3.appendChild(label);
+
+  const select = el('select', { class: 'topic-select' });
+  select.appendChild(el('option', { value: 'Random' }, 'Random (any type)'));
+  QUESTION_TYPES.forEach(t => select.appendChild(el('option', { value: t.value }, t.label)));
+  step3.appendChild(select);
+
+  const errBox = el('div', { class: 'error-text' });
+  const startBtn = el('button', { class: 'btn' }, 'Start Take 5');
+  startBtn.style.marginTop = '1rem';
+  startBtn.addEventListener('click', () => startTake5Run(selection.difficulty, selection.topic, select.value));
+  step3.appendChild(startBtn);
+  step3.appendChild(errBox);
+}
+
+function startTake5Run(difficulty, topic, qtype) {
+  const run = {
+    difficulty, topic, qtype,
+    index: 0,
+    score: 0,
+    seenIds: [],
+  };
+  loadNextTake5Question(run);
+}
+
+async function loadNextTake5Question(run) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'loading' }, 'Loading…'));
+  app.appendChild(panel);
+  try {
+    const q = await api(
+      `/api/take5/question?difficulty=${encodeURIComponent(run.difficulty)}` +
+      `&topic=${encodeURIComponent(run.topic)}&qtype=${encodeURIComponent(run.qtype)}` +
+      `&exclude=${run.seenIds.join(',')}`
+    );
+    renderTake5Question(run, q);
+  } catch (e) {
+    clear();
+    const errPanel = el('div', { class: 'panel' });
+    errPanel.appendChild(el('div', { class: 'error-text' }, 'Failed to load question: ' + e.message));
+    app.appendChild(errPanel);
+  }
+}
+
+function renderTake5Question(run, q) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'step-label' }, `Question ${run.index + 1} of ${TAKE5_LENGTH}`));
+  panel.appendChild(el('div', { class: 'question-meta' }, [
+    el('span', { class: 'badge' }, q.topic),
+    el('span', { class: 'badge' }, q.difficulty),
+    el('span', { class: 'badge' }, q.type),
+  ]));
+  panel.appendChild(el('div', { class: 'prompt-text' }, q.prompt));
+
+  const getAnswer = buildAnswerInput(q, panel);
+
+  const submitBtn = el('button', { class: 'btn' }, 'Submit');
+  const errBox = el('div', { class: 'error-text' });
+
+  submitBtn.addEventListener('click', async () => {
+    const answer = getAnswer();
+    if (!answer) {
+      errBox.textContent = 'Please provide an answer.';
+      return;
+    }
+    errBox.textContent = '';
+    submitBtn.disabled = true;
+    submitBtn.textContent = q.type === 'coding' ? 'Grading…' : 'Submitting…';
+    run.seenIds.push(q.id);
+
+    try {
+      const result = await api('/api/take5/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question_id: q.id, user_answer: answer }),
+      });
+      if (result.correct) run.score += 1;
+      renderTake5Result(run, q, answer, result);
+    } catch (e) {
+      errBox.textContent = e.message;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit';
+    }
+  });
+
+  panel.appendChild(submitBtn);
+  panel.appendChild(errBox);
+  app.appendChild(panel);
+}
+
+function renderTake5Result(run, q, userAnswer, result) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'step-label' }, `Question ${run.index + 1} of ${TAKE5_LENGTH}`));
+  panel.appendChild(el('div', { class: 'result-banner ' + (result.correct ? 'correct' : 'incorrect') },
+    result.correct ? 'Correct!' : 'Not quite.'));
+  panel.appendChild(resultDetail('Your answer', formatAnswer(userAnswer, q.type)));
+  panel.appendChild(resultDetail('Correct answer', formatAnswer(result.correct_answer, q.type)));
+  if (result.explanation) panel.appendChild(resultDetail('Explanation', result.explanation));
+  if (result.llm_feedback) panel.appendChild(resultDetail('Feedback', result.llm_feedback));
+
+  run.index += 1;
+  const nextBtn = el('button', { class: 'btn' }, run.index < TAKE5_LENGTH ? 'Next question' : 'See results');
+  nextBtn.style.marginTop = '1rem';
+  nextBtn.addEventListener('click', () => {
+    if (run.index < TAKE5_LENGTH) {
+      loadNextTake5Question(run);
+    } else {
+      finalizeTake5(run);
+    }
+  });
+  panel.appendChild(nextBtn);
+  app.appendChild(panel);
+}
+
+async function finalizeTake5(run) {
+  let bestInfo = { best_score: null, is_new_best: false };
+  try {
+    bestInfo = await api('/api/take5/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        difficulty: run.difficulty, topic: run.topic, qtype: run.qtype,
+        score: run.score, total: TAKE5_LENGTH,
+      }),
+    });
+  } catch (e) { /* still show local result even if persisting the run failed */ }
+
+  renderTake5Final(run, bestInfo);
+}
+
+function renderTake5Final(run, bestInfo) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', {}, 'Take 5 complete'));
+
+  if (bestInfo.is_new_best && run.score > 0) {
+    panel.appendChild(el('div', { class: 'result-banner correct' }, 'New best Take 5 score!'));
+  }
+
+  panel.appendChild(el('div', { class: 'question-meta' }, [
+    el('span', { class: 'badge' }, run.difficulty),
+    el('span', { class: 'badge' }, run.topic),
+    el('span', { class: 'badge' }, run.qtype),
+  ]));
+
+  panel.appendChild(el('div', { class: 'stats-grid' }, [
+    statTile(`${run.score}/${TAKE5_LENGTH}`, 'Score'),
+    statTile(bestInfo.best_score != null ? bestInfo.best_score + '/5' : run.score + '/5', 'Best Take 5 score'),
+  ]));
+
+  const againBtn = el('button', { class: 'btn' }, 'Play again');
+  againBtn.style.marginTop = '1.25rem';
+  againBtn.addEventListener('click', () => {
+    api('/api/stats').then(renderTake5Selector).catch(() => renderTake5Selector({ by_difficulty: {}, by_topic: {} }));
   });
   panel.appendChild(againBtn);
 

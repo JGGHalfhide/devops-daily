@@ -3,10 +3,11 @@
 A small FastAPI web app for daily DevOps practice across topics like
 Python, Bash, AWS, Ansible, Kubernetes, Linux, Networking, and
 Terraform, with per-topic and per-difficulty stats and a day-streak
-tracker. Two modes are available, switchable via tabs in the header:
+tracker. Three modes are available, switchable via tabs in the header:
 
 - **QOTD** — one question a day (or unlimited, in practice mode)
 - **Blitz** — answer as many questions as you can in 60 seconds
+- **Take 5** — five questions, untimed
 
 ## Setup
 
@@ -61,12 +62,13 @@ python seed.py
 
 ## Usage
 
-### QOTD vs. Blitz
+### QOTD vs. Blitz vs. Take 5
 
-The header tabs switch between the two modes. QOTD is the daily-lock
-flow described below. Blitz is a standalone 60-second timed run
-(see [Blitz mode](#blitz-mode)) — switching to it never touches the
-QOTD daily lock, streak, or stats, and vice versa.
+The header tabs switch between the three modes. QOTD is the
+daily-lock flow described below. Blitz (see [Blitz mode](#blitz-mode))
+and Take 5 (see [Take 5 mode](#take-5-mode)) are standalone runs —
+switching to either never touches the QOTD daily lock, streak, or
+stats, and vice versa.
 
 ### Daily question flow
 
@@ -136,6 +138,28 @@ Each run's score is recorded in the `blitz_runs` table, and your best
 score ever (regardless of which filters you used) is shown as **Best
 blitz score** in the stats panel and on the Blitz results screen.
 
+### Take 5 mode
+
+Same three-step selector as QOTD — difficulty, topic, and question
+type, including coding — but no daily lock and no timer. You get
+exactly 5 questions, one at a time, each with a full result screen
+(correct answer, explanation, LLM feedback for coding) and a
+**Next question** button before moving on. After the fifth, you see
+your score out of 5 and whether it's a new personal best.
+
+Take 5 shares Blitz's isolation model: answers go through
+`/api/take5/check` and are never written to `attempts` or
+`questions.last_seen_at`, so a run can't affect the daily lock,
+streak, topic/difficulty stats, or QOTD's recycling queue. Repeats
+within a run are avoided the same way — via a client-tracked
+`exclude` list — falling back to allowing a repeat if a narrow filter
+combination has fewer than 5 questions. Since there's no clock, coding
+questions (LLM-graded) are included, unlike Blitz.
+
+Each run's score is recorded in the `take5_runs` table, and your best
+score ever (regardless of which filters you used) is shown as **Best
+Take 5 score** in the stats panel and on the Take 5 results screen.
+
 ### Reset progress
 
 The stats panel has a "Reset progress…" control (two-step confirm)
@@ -172,6 +196,11 @@ Blitz attempts are never inserted here (see [Blitz mode](#blitz-mode)).
 `difficulty`, `topic`, `type` (the filters used), `score` (count of
 correct answers), `total` (questions answered). `best_blitz_score` in
 `/api/stats` is `MAX(score)` over this table.
+
+**`take5_runs`** — one row per completed Take 5 run: same shape as
+`blitz_runs` (`timestamp`, `difficulty`, `topic`, `type`, `score`,
+`total` — `total` is always 5). `best_take5_score` in `/api/stats` is
+`MAX(score)` over this table.
 
 ## License
 

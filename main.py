@@ -23,6 +23,7 @@ DIFFICULTIES = ["easy", "medium", "hard"]
 QUESTION_TYPES = ["mcq", "fill-in-blank", "drag-and-drop", "dropdown-order", "coding"]
 QUESTION_TYPES_BLITZ = [t for t in QUESTION_TYPES if t != "coding"]
 WEAKEST_MIN_ATTEMPTS = 10
+TAKE5_LENGTH = 5
 
 
 @app.on_event("startup")
@@ -181,6 +182,32 @@ def _grade_non_coding(q: dict, user_answer: str) -> bool:
     return user_answer.strip().lower() == q["correct_answer"].strip().lower()
 
 
+def _grade_answer(q: dict, user_answer: str):
+    """Returns (correct, llm_feedback). Raises HTTPException if LLM grading fails."""
+    if q["type"] == "coding":
+        try:
+            return _grade_coding(q["prompt"], q["correct_answer"], user_answer)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"LLM grading failed: {e}")
+    return _grade_non_coding(q, user_answer), None
+
+
+def _pick_run_question(conn, pool_query: str, pool_params: list, exclude_ids: list):
+    """Random question matching pool_query/params, avoiding exclude_ids where possible.
+    Falls back to allowing a repeat if the pool is exhausted rather than erroring out —
+    used by Blitz/Take 5 runs, which don't rely on `last_seen_at` recycling."""
+    def pick(ids_to_exclude):
+        query = f"SELECT * FROM questions WHERE id IN ({pool_query})"
+        params = list(pool_params)
+        if ids_to_exclude:
+            query += f" AND id NOT IN ({','.join('?' * len(ids_to_exclude))})"
+            params += ids_to_exclude
+        query += " ORDER BY RANDOM() LIMIT 1"
+        return conn.execute(query, params).fetchone()
+
+    return pick(exclude_ids) or pick([])
+
+
 # ── LLM grading (coding questions) ───────────────────────────────────────────
 
 def _grade_coding(prompt: str, reference_solution: str, user_answer: str):
@@ -274,6 +301,9 @@ def get_stats():
         stats["best_blitz_score"] = conn.execute(
             "SELECT MAX(score) AS best FROM blitz_runs"
         ).fetchone()["best"]
+        stats["best_take5_score"] = conn.execute(
+            "SELECT MAX(score) AS best FROM take5_runs"
+        ).fetchone()["best"]
         return stats
 
 
@@ -353,21 +383,9 @@ def post_answer(payload: AnswerPayload):
             raise HTTPException(status_code=404, detail="Question not found")
         q = dict(row)
 
-        llm_feedback = None
         correct_answer_out = _display_correct_answer(q)
-
-        if q["type"] == "coding":
-            try:
-                correct, llm_feedback = _grade_coding(
-                    q["prompt"], q["correct_answer"], payload.user_answer
-                )
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"LLM grading failed: {e}")
-            explanation = _explanation_for(q, correct, payload.user_answer)
-
-        else:  # mcq / fill-in-blank / drag-and-drop / dropdown-order
-            correct = _grade_non_coding(q, payload.user_answer)
-            explanation = _explanation_for(q, correct, payload.user_answer)
+        correct, llm_feedback = _grade_answer(q, payload.user_answer)
+        explanation = _explanation_for(q, correct, payload.user_answer)
 
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -452,16 +470,7 @@ def get_blitz_question(
             pool_query += " AND type = ?"
             pool_params.append(qtype)
 
-        def pick(ids_to_exclude):
-            query = f"SELECT * FROM questions WHERE id IN ({pool_query})"
-            params = list(pool_params)
-            if ids_to_exclude:
-                query += f" AND id NOT IN ({','.join('?' * len(ids_to_exclude))})"
-                params += ids_to_exclude
-            query += " ORDER BY RANDOM() LIMIT 1"
-            return conn.execute(query, params).fetchone()
-
-        row = pick(exclude_ids) or pick([])
+        row = _pick_run_question(conn, pool_query, pool_params, exclude_ids)
         if not row:
             raise HTTPException(
                 status_code=404,
@@ -514,4 +523,95 @@ def post_blitz_finish(payload: BlitzFinishPayload):
             (now, payload.difficulty, payload.topic, payload.qtype, payload.score, payload.total),
         )
         best = conn.execute("SELECT MAX(score) AS best FROM blitz_runs").fetchone()["best"]
+    return {"best_score": best, "is_new_best": payload.score == best}
+
+
+# ── Take 5 mode ──────────────────────────────────────────────────────────────
+#
+# Take 5 is an untimed run of exactly TAKE5_LENGTH questions, using the same
+# difficulty/topic/type selector as QOTD (all question types, including
+# coding — there's no timer, so LLM grading latency doesn't matter here).
+# Like Blitz, it's fully isolated from QOTD: it never touches `attempts` or
+# `questions.last_seen_at`, and repeat-avoidance is done via a client-tracked
+# `exclude` list rather than the persistent recycling queue.
+
+@app.get("/api/take5/question")
+def get_take5_question(
+    difficulty: str = "random", topic: str = "Random", qtype: str = "Random", exclude: str = ""
+):
+    difficulty = difficulty.lower()
+    if difficulty not in DIFFICULTIES + ["random"]:
+        raise HTTPException(status_code=400, detail="Invalid difficulty")
+    if qtype != "Random" and qtype not in QUESTION_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid question type")
+
+    exclude_ids = [int(x) for x in exclude.split(",") if x.strip().isdigit()]
+
+    with get_conn() as conn:
+        resolved_topic = _resolve_topic(topic, _all_attempts(conn))
+
+        pool_query = "SELECT id FROM questions WHERE 1=1"
+        pool_params: list = []
+        if difficulty != "random":
+            pool_query += " AND difficulty = ?"
+            pool_params.append(difficulty)
+        if resolved_topic:
+            pool_query += " AND topic = ?"
+            pool_params.append(resolved_topic)
+        if qtype != "Random":
+            pool_query += " AND type = ?"
+            pool_params.append(qtype)
+
+        row = _pick_run_question(conn, pool_query, pool_params, exclude_ids)
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail="No questions available for that combination — try different filters",
+            )
+
+        return _serialize_question(dict(row))
+
+
+class Take5CheckPayload(BaseModel):
+    question_id: int
+    user_answer: str
+
+
+@app.post("/api/take5/check")
+def post_take5_check(payload: Take5CheckPayload):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM questions WHERE id = ?", (payload.question_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Question not found")
+        q = dict(row)
+
+        correct, llm_feedback = _grade_answer(q, payload.user_answer)
+        return {
+            "correct": correct,
+            "correct_answer": _display_correct_answer(q),
+            "explanation": _explanation_for(q, correct, payload.user_answer),
+            "llm_feedback": llm_feedback,
+        }
+
+
+class Take5FinishPayload(BaseModel):
+    difficulty: str
+    topic: str
+    qtype: str
+    score: int
+    total: int
+
+
+@app.post("/api/take5/finish")
+def post_take5_finish(payload: Take5FinishPayload):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO take5_runs (timestamp, difficulty, topic, type, score, total)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (now, payload.difficulty, payload.topic, payload.qtype, payload.score, payload.total),
+        )
+        best = conn.execute("SELECT MAX(score) AS best FROM take5_runs").fetchone()["best"]
     return {"best_score": best, "is_new_best": payload.score == best}
