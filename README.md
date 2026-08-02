@@ -3,11 +3,13 @@
 A small FastAPI web app for daily DevOps practice across topics like
 Python, Bash, AWS, Ansible, Kubernetes, Linux, Networking, and
 Terraform, with per-topic and per-difficulty stats and a day-streak
-tracker. Three modes are available, switchable via tabs in the header:
+tracker. Four modes are available, switchable via tabs in the header:
 
 - **QOTD** — one question a day (or unlimited, in practice mode)
 - **Blitz** — answer as many questions as you can in 60 seconds
 - **Take 5** — five questions, untimed
+- **Ladder** — climb easy → medium → hard per subject; one wrong
+  answer ends the run
 
 ## Setup
 
@@ -62,13 +64,14 @@ python seed.py
 
 ## Usage
 
-### QOTD vs. Blitz vs. Take 5
+### QOTD vs. Blitz vs. Take 5 vs. Ladder
 
-The header tabs switch between the three modes. QOTD is the
-daily-lock flow described below. Blitz (see [Blitz mode](#blitz-mode))
-and Take 5 (see [Take 5 mode](#take-5-mode)) are standalone runs —
-switching to either never touches the QOTD daily lock, streak, or
-stats, and vice versa.
+The header tabs switch between the four modes. QOTD is the
+daily-lock flow described below. Blitz (see [Blitz mode](#blitz-mode)),
+Take 5 (see [Take 5 mode](#take-5-mode)), and Ladder (see
+[Ladder mode](#ladder-mode)) are standalone runs — switching to any of
+them never touches the QOTD daily lock, streak, or stats, and vice
+versa.
 
 ### Daily question flow
 
@@ -160,6 +163,34 @@ Each run's score is recorded in the `take5_runs` table, and your best
 score ever (regardless of which filters you used) is shown as **Best
 Take 5 score** in the stats panel and on the Take 5 results screen.
 
+### Ladder mode
+
+Pick one or more subjects (no Random — this is the one mode where a
+subject is mandatory) by clicking them in the order you want to play
+them; the order is shown as a number on each selected subject. Hit
+**Start Ladder** and you're given an **easy** question for the first
+subject. Answer correctly and you move to a **medium** question on the
+same subject, then **hard**; clear hard and the next subject's easy
+question begins. Answer *any* question wrong and the run ends
+immediately. Clearing hard on your last subject clears the whole
+ladder. There's no difficulty or type picker beyond the subject
+list — difficulty is dictated by your position on the ladder, and
+question type (including coding, since there's no clock) is always
+random.
+
+Your score is the number of questions answered correctly before the
+run ended (or before you cleared the whole ladder). Ladder shares the
+same isolation model as Blitz/Take 5: `/api/ladder/check` never writes
+to `attempts` or `questions.last_seen_at`, and repeats within a run are
+avoided via a client-tracked `exclude` list across the whole run (all
+subjects), falling back to allowing a repeat if a subject/difficulty
+pool is exhausted.
+
+Each run is recorded in the `ladder_runs` table (subjects played, in
+order, plus final score), and your best score ever — regardless of how
+many subjects you picked — is shown as **Best ladder score** in the
+stats panel and on the Ladder results screen.
+
 ### Reset progress
 
 The stats panel has a "Reset progress…" control (two-step confirm)
@@ -200,6 +231,11 @@ correct answers), `total` (questions answered). `best_blitz_score` in
 **`take5_runs`** — one row per completed Take 5 run: same shape as
 `blitz_runs` (`timestamp`, `difficulty`, `topic`, `type`, `score`,
 `total` — `total` is always 5). `best_take5_score` in `/api/stats` is
+`MAX(score)` over this table.
+
+**`ladder_runs`** — one row per completed Ladder run: `timestamp`,
+`topics` (JSON array of subjects, in the order played), `score`
+(questions answered correctly). `best_ladder_score` in `/api/stats` is
 `MAX(score)` over this table.
 
 ## License

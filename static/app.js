@@ -6,7 +6,7 @@ const state = {
   topic: null,
   qtype: null,
   practice: localStorage.getItem('practiceMode') === '1',
-  mode: ['blitz', 'take5'].includes(localStorage.getItem('mode')) ? localStorage.getItem('mode') : 'qotd',
+  mode: ['blitz', 'take5', 'ladder'].includes(localStorage.getItem('mode')) ? localStorage.getItem('mode') : 'qotd',
 };
 
 const QUESTION_TYPES = [
@@ -60,6 +60,11 @@ async function init() {
   if (state.mode === 'take5') {
     const stats = await api('/api/stats');
     renderTake5Selector(stats);
+    return;
+  }
+  if (state.mode === 'ladder') {
+    const stats = await api('/api/stats');
+    renderLadderSelector(stats);
     return;
   }
   const [stateData, stats] = await Promise.all([
@@ -192,6 +197,7 @@ function renderStatsPanel(stats) {
     statTile(stats.total_attempts, 'Total answered'),
     statTile(stats.best_blitz_score != null ? stats.best_blitz_score : '—', 'Best blitz score'),
     statTile(stats.best_take5_score != null ? stats.best_take5_score + '/5' : '—', 'Best Take 5 score'),
+    statTile(stats.best_ladder_score != null ? stats.best_ladder_score : '—', 'Best ladder score'),
   ]));
 
   panel.appendChild(el('div', { class: 'step-label' }, 'By difficulty'));
@@ -996,6 +1002,228 @@ function renderTake5Final(run, bestInfo) {
   againBtn.style.marginTop = '1.25rem';
   againBtn.addEventListener('click', () => {
     api('/api/stats').then(renderTake5Selector).catch(() => renderTake5Selector({ by_difficulty: {}, by_topic: {} }));
+  });
+  panel.appendChild(againBtn);
+
+  app.appendChild(panel);
+  api('/api/stats').then(stats => app.appendChild(renderStatsPanel(stats))).catch(() => {});
+}
+
+// ── ladder mode ──────────────────────────────────────────────────────────────
+
+const LADDER_DIFFICULTY_ORDER = ['easy', 'medium', 'hard'];
+
+function renderLadderSelector(stats) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', {}, 'Ladder — climb each subject: easy → medium → hard'));
+  panel.appendChild(el('div', { class: 'step-label' },
+    'Pick one or more subjects, in the order you want to play them. One wrong answer ends the run.'));
+
+  const selectedTopics = [];
+  const buttons = {};
+  const grid = el('div', { class: 'choice-grid' });
+
+  const errBox = el('div', { class: 'error-text' });
+  const startBtn = el('button', { class: 'btn' }, 'Start Ladder');
+  startBtn.disabled = true;
+  startBtn.style.marginTop = '1rem';
+
+  function updateTopicButtons() {
+    TOPICS.forEach(topic => {
+      const btn = buttons[topic];
+      const pos = selectedTopics.indexOf(topic);
+      if (pos === -1) {
+        btn.classList.remove('selected');
+        btn.textContent = topic;
+      } else {
+        btn.classList.add('selected');
+        btn.textContent = `${pos + 1}. ${topic}`;
+      }
+    });
+    startBtn.disabled = selectedTopics.length === 0;
+  }
+
+  TOPICS.forEach(topic => {
+    const btn = el('button', { class: 'choice-btn' }, topic);
+    btn.addEventListener('click', () => {
+      const pos = selectedTopics.indexOf(topic);
+      if (pos === -1) selectedTopics.push(topic);
+      else selectedTopics.splice(pos, 1);
+      updateTopicButtons();
+    });
+    buttons[topic] = btn;
+    grid.appendChild(btn);
+  });
+
+  startBtn.addEventListener('click', () => {
+    if (!selectedTopics.length) return;
+    startLadderRun([...selectedTopics]);
+  });
+
+  panel.appendChild(grid);
+  panel.appendChild(startBtn);
+  panel.appendChild(errBox);
+
+  app.appendChild(panel);
+  app.appendChild(renderStatsPanel(stats));
+}
+
+function startLadderRun(topics) {
+  const run = { topics, topicIndex: 0, difficulty: 'easy', score: 0, seenIds: [] };
+  loadNextLadderQuestion(run);
+}
+
+async function loadNextLadderQuestion(run) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'loading' }, 'Loading…'));
+  app.appendChild(panel);
+  try {
+    const topic = run.topics[run.topicIndex];
+    const q = await api(
+      `/api/ladder/question?topic=${encodeURIComponent(topic)}` +
+      `&difficulty=${encodeURIComponent(run.difficulty)}&exclude=${run.seenIds.join(',')}`
+    );
+    renderLadderQuestion(run, q);
+  } catch (e) {
+    clear();
+    const errPanel = el('div', { class: 'panel' });
+    errPanel.appendChild(el('div', { class: 'error-text' }, 'Failed to load question: ' + e.message));
+    app.appendChild(errPanel);
+  }
+}
+
+function renderLadderQuestion(run, q) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'step-label' },
+    `Subject ${run.topicIndex + 1} of ${run.topics.length} — ${run.topics[run.topicIndex]}`));
+  panel.appendChild(el('div', { class: 'question-meta' }, [
+    el('span', { class: 'badge' }, q.topic),
+    el('span', { class: 'badge' }, q.difficulty),
+    el('span', { class: 'badge' }, q.type),
+    el('span', { class: 'badge' }, `Score: ${run.score}`),
+  ]));
+  panel.appendChild(el('div', { class: 'prompt-text' }, q.prompt));
+
+  const getAnswer = buildAnswerInput(q, panel);
+
+  const submitBtn = el('button', { class: 'btn' }, 'Submit');
+  const errBox = el('div', { class: 'error-text' });
+
+  submitBtn.addEventListener('click', async () => {
+    const answer = getAnswer();
+    if (!answer) {
+      errBox.textContent = 'Please provide an answer.';
+      return;
+    }
+    errBox.textContent = '';
+    submitBtn.disabled = true;
+    submitBtn.textContent = q.type === 'coding' ? 'Grading…' : 'Submitting…';
+    run.seenIds.push(q.id);
+
+    try {
+      const result = await api('/api/ladder/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question_id: q.id, user_answer: answer }),
+      });
+      if (result.correct) run.score += 1;
+      renderLadderResult(run, q, answer, result);
+    } catch (e) {
+      errBox.textContent = e.message;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit';
+    }
+  });
+
+  panel.appendChild(submitBtn);
+  panel.appendChild(errBox);
+  app.appendChild(panel);
+}
+
+function _advanceLadder(run) {
+  const idx = LADDER_DIFFICULTY_ORDER.indexOf(run.difficulty);
+  if (idx < LADDER_DIFFICULTY_ORDER.length - 1) {
+    run.difficulty = LADDER_DIFFICULTY_ORDER[idx + 1];
+    return { cleared: false };
+  }
+  run.topicIndex += 1;
+  if (run.topicIndex >= run.topics.length) {
+    return { cleared: true };
+  }
+  run.difficulty = 'easy';
+  return { cleared: false };
+}
+
+function renderLadderResult(run, q, userAnswer, result) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('div', { class: 'step-label' },
+    `Subject ${run.topicIndex + 1} of ${run.topics.length} — ${run.topics[run.topicIndex]}`));
+  panel.appendChild(el('div', { class: 'result-banner ' + (result.correct ? 'correct' : 'incorrect') },
+    result.correct ? 'Correct!' : 'Not quite — the ladder ends here.'));
+  panel.appendChild(resultDetail('Your answer', formatAnswer(userAnswer, q.type)));
+  panel.appendChild(resultDetail('Correct answer', formatAnswer(result.correct_answer, q.type)));
+  if (result.explanation) panel.appendChild(resultDetail('Explanation', result.explanation));
+  if (result.llm_feedback) panel.appendChild(resultDetail('Feedback', result.llm_feedback));
+
+  const nextBtn = el('button', { class: 'btn' });
+  nextBtn.style.marginTop = '1rem';
+
+  if (!result.correct) {
+    nextBtn.textContent = 'See results';
+    nextBtn.addEventListener('click', () => finalizeLadder(run, false));
+  } else {
+    const { cleared } = _advanceLadder(run);
+    if (cleared) {
+      nextBtn.textContent = 'See results';
+      nextBtn.addEventListener('click', () => finalizeLadder(run, true));
+    } else {
+      nextBtn.textContent = 'Next question';
+      nextBtn.addEventListener('click', () => loadNextLadderQuestion(run));
+    }
+  }
+
+  panel.appendChild(nextBtn);
+  app.appendChild(panel);
+}
+
+async function finalizeLadder(run, cleared) {
+  let bestInfo = { best_score: null, is_new_best: false };
+  try {
+    bestInfo = await api('/api/ladder/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topics: run.topics, score: run.score }),
+    });
+  } catch (e) { /* still show local result even if persisting the run failed */ }
+
+  renderLadderFinal(run, cleared, bestInfo);
+}
+
+function renderLadderFinal(run, cleared, bestInfo) {
+  clear();
+  const panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', {}, cleared ? 'Ladder complete! You cleared every subject.' : 'Game over'));
+
+  if (bestInfo.is_new_best && run.score > 0) {
+    panel.appendChild(el('div', { class: 'result-banner correct' }, 'New best ladder score!'));
+  }
+
+  panel.appendChild(el('div', { class: 'question-meta' },
+    run.topics.map((t, i) => el('span', { class: 'badge' }, `${i + 1}. ${t}`))));
+
+  panel.appendChild(el('div', { class: 'stats-grid' }, [
+    statTile(run.score, 'Score'),
+    statTile(bestInfo.best_score != null ? bestInfo.best_score : run.score, 'Best ladder score'),
+  ]));
+
+  const againBtn = el('button', { class: 'btn' }, 'Play again');
+  againBtn.style.marginTop = '1.25rem';
+  againBtn.addEventListener('click', () => {
+    api('/api/stats').then(renderLadderSelector).catch(() => renderLadderSelector({ by_difficulty: {}, by_topic: {} }));
   });
   panel.appendChild(againBtn);
 

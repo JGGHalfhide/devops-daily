@@ -304,6 +304,9 @@ def get_stats():
         stats["best_take5_score"] = conn.execute(
             "SELECT MAX(score) AS best FROM take5_runs"
         ).fetchone()["best"]
+        stats["best_ladder_score"] = conn.execute(
+            "SELECT MAX(score) AS best FROM ladder_runs"
+        ).fetchone()["best"]
         return stats
 
 
@@ -614,4 +617,79 @@ def post_take5_finish(payload: Take5FinishPayload):
             (now, payload.difficulty, payload.topic, payload.qtype, payload.score, payload.total),
         )
         best = conn.execute("SELECT MAX(score) AS best FROM take5_runs").fetchone()["best"]
+    return {"best_score": best, "is_new_best": payload.score == best}
+
+
+# ── Ladder mode ──────────────────────────────────────────────────────────────
+#
+# Ladder climbs one or more subjects you choose (order matters — you play them
+# in the order you selected them), each as easy → medium → hard: a correct
+# answer unlocks the next rung, a wrong answer ends the run immediately.
+# Clearing hard on a subject moves to the next subject's easy; clearing hard
+# on the last subject clears the whole ladder. There's no topic/difficulty/type
+# picker beyond the subject list — difficulty is dictated by ladder position,
+# and question type is always random (including coding, since there's no
+# clock). Isolation and repeat-avoidance follow the same model as Blitz/Take 5.
+
+@app.get("/api/ladder/question")
+def get_ladder_question(topic: str, difficulty: str, exclude: str = ""):
+    difficulty = difficulty.lower()
+    if topic not in TOPICS:
+        raise HTTPException(status_code=400, detail="Invalid topic")
+    if difficulty not in DIFFICULTIES:
+        raise HTTPException(status_code=400, detail="Invalid difficulty")
+
+    exclude_ids = [int(x) for x in exclude.split(",") if x.strip().isdigit()]
+
+    with get_conn() as conn:
+        row = _pick_run_question(
+            conn, "SELECT id FROM questions WHERE topic = ? AND difficulty = ?",
+            [topic, difficulty], exclude_ids,
+        )
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail="No questions available for that subject/difficulty",
+            )
+        return _serialize_question(dict(row))
+
+
+class LadderCheckPayload(BaseModel):
+    question_id: int
+    user_answer: str
+
+
+@app.post("/api/ladder/check")
+def post_ladder_check(payload: LadderCheckPayload):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM questions WHERE id = ?", (payload.question_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Question not found")
+        q = dict(row)
+
+        correct, llm_feedback = _grade_answer(q, payload.user_answer)
+        return {
+            "correct": correct,
+            "correct_answer": _display_correct_answer(q),
+            "explanation": _explanation_for(q, correct, payload.user_answer),
+            "llm_feedback": llm_feedback,
+        }
+
+
+class LadderFinishPayload(BaseModel):
+    topics: list[str]
+    score: int
+
+
+@app.post("/api/ladder/finish")
+def post_ladder_finish(payload: LadderFinishPayload):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO ladder_runs (timestamp, topics, score) VALUES (?, ?, ?)",
+            (now, json.dumps(payload.topics), payload.score),
+        )
+        best = conn.execute("SELECT MAX(score) AS best FROM ladder_runs").fetchone()["best"]
     return {"best_score": best, "is_new_best": payload.score == best}

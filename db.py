@@ -57,6 +57,13 @@ def init_db():
                 score      INTEGER NOT NULL,
                 total      INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ladder_runs (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT    NOT NULL,
+                topics    TEXT    NOT NULL,
+                score     INTEGER NOT NULL
+            );
         """)
 
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(questions)").fetchall()}
