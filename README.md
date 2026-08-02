@@ -1,5 +1,7 @@
 # DevOps Daily
 
+![DevOps Daily Home](images/home.jpg)
+
 A small FastAPI web app for daily DevOps practice across topics like
 Python, Bash, AWS, Ansible, Kubernetes, Linux, Networking, and
 Terraform, with per-topic and per-difficulty stats and a day-streak
